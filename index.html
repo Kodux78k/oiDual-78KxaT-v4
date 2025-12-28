@@ -1064,10 +1064,12 @@ function toggleDrawer(id) { document.getElementById(id).classList.toggle('open')
 window.onload = () => App.init();
 </script>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.9.3/html2pdf.bundle.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.9.3/html2pdf.bundle.min.js">
+</script>
 
 
-     <style id="TEXT_BEAUTY_V3">
+<!-- ============ TEXT BEAUTY & INTERACTION PATCH — V3 (aditivo) ============ -->
+<style id="TEXT_BEAUTY_V3">
 :root{
   --txt-card: color-mix(in oklab, var(--panel, #0e1220) 92%, black);
   --txt-bd: color-mix(in oklab, var(--ink, #e8ecf6) 16%, transparent);
@@ -1150,322 +1152,320 @@ window.onload = () => App.init();
 </style>
 
 <script id="TEXT_BEAUTY_V3_SCRIPT">
-(function(){
-  if(window.__TEXT_BEAUTY_V3_LOADED__) return;
-  window.__TEXT_BEAUTY_V3_LOADED__ = true;
+(()=>{'use strict';
+if(window.__TEXT_BEAUTY_V3__) return; window.__TEXT_BEAUTY_V3__=true;
 
-  function _safeSpeakLocal(msg){
-    try{
-      // prefer App.speakText if available (handled by global speak helper)
-      if(window.Infodox && typeof window.Infodox.speakViaApp === 'function') {
-        return window.Infodox.speakViaApp(msg);
+/* Utilitários */
+const $=(s,r=document)=>r.querySelector(s);
+const $$=(s,r=document)=>[...r.querySelectorAll(s)];
+const esc=(s)=>s.replace(/[&<>"']/g,m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m]));
+
+/* 0) Toggle edição rápida */
+let EDIT_ON=false;
+const toggleEdit=()=>{
+  EDIT_ON=!EDIT_ON;
+  document.body.toggleAttribute('data-edit', EDIT_ON);
+  const host = document.getElementById('CONTENT') || document.querySelector('main, article, .render, .reader, body');
+  if(host) host.contentEditable = EDIT_ON ? 'plaintext-only' : 'false';
+};
+document.addEventListener('keydown',e=>{
+  if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='e'){ e.preventDefault(); toggleEdit(); }
+});
+
+/* 1) Key:Value negrito (palavra:) + parênteses + chips [ ]
+   - roda apenas em blocos de texto (p, li) e não mexe dentro de code/pre */
+const processInline = (root=document)=>{
+  const targets = $$('p, li, h1, h2, h3, h4, h5, h6', root).filter(n=>!n.closest('pre, code, .no-beauty'));
+  const rxKV = /(^|\s)([A-Za-zÀ-ÿ0-9_]+):(?=\s|$)/g; // Palavra:
+  const rxParen = /\(([^\n)]+)\)/g;                  // ( … )
+  const rxChip  = /\[\[([^[\]]+)\]\]|\[([^[\]]+)\]/g; // [[a]] | [a]
+
+  for(const el of targets){
+    // evita processar múltiplas vezes
+    if(el.dataset.inlineProcessed==='1') continue;
+    el.dataset.inlineProcessed='1';
+
+    const html = el.innerHTML;
+    if(/<pre|<code|contenteditable/i.test(html)) continue;
+
+    let out = html;
+
+    // 1. Palavra:  → <strong>
+    out = out.replace(rxKV, (m, sp, key)=> `${sp}<strong class="kv-key">${key}:</strong>`);
+
+    // 2. ( ... )   → span-paren
+    out = out.replace(rxParen, (m, inside)=> `<span class="span-paren">(${inside})</span>`);
+
+    // 3. [ ... ] / [[ ... ]]  → chip/chip-btn
+    out = out.replace(rxChip, (m, dbl, sgl)=>{
+      const label = (dbl||sgl||'').trim();
+      return `<span class="${dbl?'chip-btn':'chip'}" data-chip="${esc(label)}">${esc(label)}</span>`;
+    });
+
+    el.innerHTML = out;
+  }
+};
+
+/* 2) Perguntas → .q-card (frases que terminam com '?') */
+const processQuestions=(root=document)=>{
+  const paras = $$('p', root).filter(n=>!n.closest('.q-card, pre, code, .no-beauty'));
+  for(const p of paras){
+    const txt = (p.innerText||'').trim();
+    if(txt.endsWith('?') && !p.dataset.qProcessed){
+      p.dataset.qProcessed='1';
+      const wrap=document.createElement('div'); wrap.className='q-card';
+      wrap.innerHTML = `<div class="q-ico">?</div><div class="q-body">${esc(txt)}</div>`;
+      p.replaceWith(wrap);
+    }
+  }
+};
+
+/* 3) Flow text: melhora texto corrido, cria heading leve se linha for "Algo:" sozinha */
+const beautifyFlow=(root=document)=>{
+  const container = root.querySelector('.flow-text') || root; // se já tiver classe, usa; senão aplica heurística suave
+  $$('p', container).forEach(p=>{
+    const t=(p.innerText||'').trim();
+    if(/^[^:\n]{3,}:\s*$/.test(t)){ // linha que termina com ":" vira heading leve
+      p.classList.add('kv-head');
+    }
+    // Quebra parágrafos absurdamente longos em dois (heurística)
+    if(t.length>600 && t.includes('. ')){
+      const mark = t.indexOf('. ', Math.floor(t.length/2));
+      if(mark>0){
+        const a=t.slice(0, mark+1), b=t.slice(mark+1);
+        const p2=p.cloneNode(); p2.textContent=b.trim();
+        p.textContent=a.trim();
+        p.insertAdjacentElement('afterend', p2);
       }
-      const u = new SpeechSynthesisUtterance(String(msg||''));
-      u.lang = 'pt-BR'; u.rate = 1.05;
-      window.speechSynthesis.cancel(); window.speechSynthesis.speak(u);
-    }catch(e){ console.warn('[Beauty] local speak fail', e); }
+    }
+  });
+};
+
+/* 4) Listas copiáveis: badge + click copy */
+const enableCopyLists=(root=document)=>{
+  const lists = $$('.list-card', root);
+  for(const card of lists){
+    if(card.querySelector('.copy-badge')) continue;
+    const badge = document.createElement('div');
+    badge.className='copy-badge'; badge.textContent='copiar';
+    card.appendChild(badge);
+    card.addEventListener('click', e=>{
+      // evita copiar quando clicou em link/botão dentro
+      if(e.target.closest('a,button,.chip,.chip-btn')) return;
+      const txt = [...card.querySelectorAll('li')].map(li=>li.innerText.trim()).join('\n');
+      navigator.clipboard.writeText(txt).then(()=>{
+        badge.textContent='copiado!'; setTimeout(()=>badge.textContent='copiar',1200);
+      });
+    }, {passive:true});
   }
+};
 
-  function processInline(root=document){
-    root.querySelectorAll('.msg-block.ai').forEach(block=>{
-      if(block.dataset._beauty_md) return;
-      try{
-        const raw = block.dataset.raw || block.innerText || '';
-        if(typeof marked !== 'undefined' && /[#_*`]/.test(raw)){
-          block.innerHTML = marked.parse(raw);
-        }
-      }catch(e){}
-      block.dataset._beauty_md = '1';
-    });
-  }
-
-  function beautifyFlow(root=document){
-    root.querySelectorAll('.msg-block.ai pre').forEach(pre=>{
-      if(pre.dataset._beauty_code) return;
-      const btn = document.createElement('button');
-      btn.className = 'copy-code-btn';
-      btn.textContent = 'Copiar Código';
-      btn.onclick = (ev)=>{
-        ev.stopPropagation();
-        try{
-          const code = pre.querySelector('code') ? pre.querySelector('code').innerText : pre.innerText;
-          navigator.clipboard.writeText(code);
-          btn.textContent = 'Copiado!';
-          _safeSpeakLocal('Código copiado para a área de transferência.');
-          setTimeout(()=>{ btn.textContent = 'Copiar Código'; }, 1600);
-        }catch(err){ console.warn(err); }
-      };
-      pre.style.position = 'relative';
-      pre.appendChild(btn);
-      pre.dataset._beauty_code = '1';
-    });
-  }
-
-  function enableCopyLists(root=document){
-    root.querySelectorAll('.msg-block.ai ul, .msg-block.ai ol').forEach(list=>{
-      if(list.dataset._beauty_list) return;
-      const btn = document.createElement('button');
-      btn.className = 'tool-btn';
-      btn.style.margin = '8px';
-      btn.textContent = 'Copiar Lista';
-      btn.onclick = ()=>{
-        const txt = Array.from(list.querySelectorAll('li')).map(li=>li.innerText).join('\n');
-        navigator.clipboard.writeText(txt);
-        _safeSpeakLocal('Lista copiada.');
-        btn.textContent = 'Copiado!';
-        setTimeout(()=>btn.textContent='Copiar Lista', 1400);
-      };
-      list.parentNode.insertBefore(btn, list);
-      list.dataset._beauty_list = '1';
-    });
-  }
-
-  function renderRawHTML(root=document){
-    root.querySelectorAll('.msg-block[data-raw]').forEach(block=>{
-      if(block.dataset._beauty_raw) return;
-      const raw = block.dataset.raw || '';
-      if(/<\s*(div|img|p|table|section|iframe)/i.test(raw)){
-        try{
-          const tmp = document.createElement('div');
-          tmp.innerHTML = raw; // assume trusted input; sanitize if necessary
-          block.innerHTML = tmp.innerHTML;
-        }catch(e){}
-      }
-      block.dataset._beauty_raw = '1';
-    });
-  }
-
-  window.__TEXT_BEAUTY_V3__ = { processInline, beautifyFlow, enableCopyLists, renderRawHTML };
-
-  document.addEventListener('infodx:rendered', (e)=>{
-    const node = e && e.detail && e.detail.node ? e.detail.node : document;
-    try{ processInline(node); renderRawHTML(node); beautifyFlow(node); enableCopyLists(node); }catch(err){ console.warn(err); }
+/* 5) HTML/SVG pass-through
+   - ```html-raw ... ``` → renderiza
+   - <div data-raw-html>…(escapado)…</div> → renderiza
+*/
+const renderRawHTML=(root=document)=>{
+  // code fence transform
+  $$('pre code', root).forEach(code=>{
+    const cls = (code.className||'').toLowerCase();
+    if(cls.includes('language-html-raw') || cls.includes('lang-html-raw')){
+      const raw = code.textContent;
+      const box = document.createElement('div');
+      box.className='raw-html-card';
+      box.innerHTML = `<div class="raw-note">HTML/SVG renderizado a partir de bloco <code>html-raw</code></div>`;
+      const slot = document.createElement('div');
+      slot.className='raw-slot';
+      // injeta SEM esc, assumindo que o autor confia no conteúdo
+      slot.innerHTML = raw;
+      box.appendChild(slot);
+      const pre = code.closest('pre');
+      pre.replaceWith(box);
+    }
   });
 
-  document.addEventListener('DOMContentLoaded', ()=> setTimeout(()=> document.dispatchEvent(new CustomEvent('infodx:rendered', {detail:{node:document}})), 60));
-  window.__TEXT_BEAUTY_V3_RUN__ = (sel) => {
-    const root = sel ? document.querySelector(sel) : document;
-    processInline(root); renderRawHTML(root); beautifyFlow(root); enableCopyLists(root);
-  };
+  // <div data-raw-html>…</div>
+  $$('div[data-raw-html]', root).forEach(div=>{
+    const raw = div.textContent; // assume texto escapado pelo md
+    const box = document.createElement('div'); box.className='raw-html-card';
+    const slot = document.createElement('div'); slot.className='raw-slot';
+    slot.innerHTML = raw;
+    box.appendChild(slot);
+    div.replaceWith(box);
+  });
+};
+
+/* 6) Delegação de cliques para chips (colchetes) */
+document.addEventListener('click', e=>{
+  const chip = e.target.closest('.chip, .chip-btn');
+  if(chip){
+    const label = chip.dataset.chip||chip.textContent.trim();
+    // dispara um evento customizado para teu bus/orquestrador
+    const ev = new CustomEvent('chip:click', {detail:{label, source:'text-beauty-v3'}});
+    document.dispatchEvent(ev);
+  }
+}, {passive:true});
+
+/* 7) Orquestração */
+const run=(ctx=document)=>{
+  processInline(ctx);
+  processQuestions(ctx);
+  beautifyFlow(ctx);
+  enableCopyLists(ctx);
+  renderRawHTML(ctx);
+};
+
+if(window.__RENDERBUS__?.on){
+  window.__RENDERBUS__.on('after', run, {name:'text-beauty-v3', priority: 96});
+}else{
+  (document.readyState==='loading') ? document.addEventListener('DOMContentLoaded',()=>run(document)) : run(document);
+  new MutationObserver(m=>m.forEach(x=>x.addedNodes&&x.addedNodes.forEach(n=>n.nodeType===1&&run(n))))
+    .observe(document.body,{childList:true,subtree:true});
+}
 })();
 </script>
+<!-- ============ /TEXT BEAUTY & INTERACTION PATCH — V3 ============ -->
 
-<script id="TRINITY_OVERRIDE">
-(function(){
-  if(window.TrinityTTS && window.TrinityTTS.__loaded) return;
-  window.TrinityTTS = window.TrinityTTS || {};
-  window.TrinityTTS.__loaded = true;
+<!-- ============ LIST/ASCII BEAUTY PATCH — V2 (hierarquia + traço-cápsula) ============ -->
+<style id="LIST_BEAUTY_V2">
+/* sem conflito: usa escopo mais específico, preservando V1 */
+:root{
+  --list-bg: color-mix(in oklab, var(--panel, #0e1220) 90%, black);
+  --list-border: color-mix(in oklab, var(--ink, #e8ecf6) 16%, transparent);
+  --list-shadow: 0 6px 24px rgba(0,0,0,.25), inset 0 0 0 1px var(--list-border);
+  --list-radius: 16px;
+  --list-marker-size: 1.65rem;
+  --list-muted: color-mix(in oklab, var(--ink, #e8ecf6) 62%, transparent);
+}
 
-  // robust speak helper is installed in Infodox later; reference if present
-  function _localSpeak(text, opts){
-    try{
-      if(window.Infodox && typeof window.Infodox.speakViaApp === 'function') return window.Infodox.speakViaApp(text, opts);
-      // fallback to SpeechSynthesis
-      const u = new SpeechSynthesisUtterance(String(text||''));
-      u.lang = (opts && opts.lang) || 'pt-BR';
-      u.rate = (opts && opts.rate) || 1.05;
-      window.speechSynthesis.cancel(); window.speechSynthesis.speak(u);
-    }catch(e){ console.warn('[Trinity] localSpeak fail', e); }
-  }
+/* wrapper visual */
+.list-card{ background:var(--list-bg); border-radius:var(--list-radius);
+  box-shadow:var(--list-shadow); border:1px solid var(--list-border);
+  padding:clamp(.6rem,.9rem,1rem); margin:.85rem 0; }
+.list-card ul, .list-card ol{ margin:.25rem 0; padding:0; list-style:none; }
+.list-card li{ display:grid; grid-template-columns:auto 1fr; gap:.65rem; align-items:start; padding:.35rem .25rem; }
+.list-card li > ul, .list-card li > ol{ margin-top:.35rem; margin-left:1.85rem; }
 
-  window.TrinityTTS.injectJokers = function(rootSelector){
-    const root = rootSelector ? document.querySelector(rootSelector) : document;
-    if(!root) return;
-    root.querySelectorAll('.msg-block.ai').forEach(block=>{
-      if(block.dataset.trinityAttached) return;
-      const btn = document.createElement('button');
-      btn.className = 'tool-btn';
-      btn.title = 'Ler com Trinity';
-      btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 1v22"/></svg>';
-      btn.onclick = ()=> {
-        const text = block.dataset.raw || block.innerText || '';
-        _localSpeak(text, {lang:'pt-BR', rate:1.05});
-      };
-      const tools = block.querySelector('.msg-tools');
-      if(tools) tools.insertBefore(btn, tools.firstChild);
-      else block.appendChild(btn);
-      block.dataset.trinityAttached = '1';
-    });
-  };
+/* ========= OL: numeração hierárquica ========= */
+.list-card ol.ol-neo{ counter-reset:item; }
+.list-card ol.ol-neo li{ counter-increment:item; }
+.list-card ol.ol-neo li::before{
+  /* hierarquia: 1, 1.1, 1.1.1 */
+  content:counters(item, ".");
+  inline-size:auto; min-inline-size: var(--list-marker-size);
+  block-size: var(--list-marker-size);
+  padding:0 .55rem; display:grid; place-items:center;
+  font-weight:700; font-variant-numeric: tabular-nums;
+  border-radius:12px;
+  background:linear-gradient(42deg, var(--grad-a, #7effa1), var(--grad-b, #67e6ff));
+  color:#000; box-shadow:0 2px 10px rgba(0,0,0,.35);
+}
+/* reseta contador em sub-listas para formar 1.1, 1.2, etc. */
+.list-card ol.ol-neo ol{ counter-reset:item; }
 
-  window.TrinityTTS.attachPlayable = function(rootSelector){
-    return window.TrinityTTS.injectJokers(rootSelector);
-  };
+/* ========= UL: bullets padrão (diamante) ========= */
+.list-card ul.ul-neo:not(.style-dash):not([data-bullet="dash"]) > li::before{
+  content:"";
+  inline-size:.9rem; block-size:.9rem; border-radius:8px;
+  background:linear-gradient(42deg, var(--grad-a, #7effa1), var(--grad-b, #67e6ff));
+  box-shadow:0 1px 6px rgba(0,0,0,.35), 0 0 0 1px color-mix(in oklab, #fff 14%, transparent);
+  translate:0 .15rem;
+}
 
-  window.TrinityTTS.speak = function(text, opts){
-    _localSpeak(text, opts || {});
-  };
+/* ========= UL: variante “traço-cápsula” ========= */
+.list-card ul.ul-neo.style-dash > li::before,
+.list-card ul.ul-neo[data-bullet="dash"] > li::before{
+  content: attr(data-marker, "–"); /* pode trocar por texto: data-marker="TIP" */
+  display:inline-grid; place-items:center;
+  inline-size:auto; min-inline-size:1.35rem; block-size:1.35rem;
+  padding:0 .6rem; border-radius:999px; font-weight:700;
+  letter-spacing:.02em;
+  background:linear-gradient(42deg, var(--grad-a, #7effa1), var(--grad-b, #67e6ff));
+  color:#000; box-shadow:0 2px 10px rgba(0,0,0,.35);
+}
 
-  document.addEventListener('infodx:rendered', (e)=>{
-    try{ window.TrinityTTS.injectJokers('#chat-container'); }catch(e){}
+/* dica/legenda leve */
+.list-card .hint{ color:var(--list-muted); font-size:.9em; }
+
+/* ========= ASCII card (igual V1, com leve glow) ========= */
+.ascii-card{ background:var(--list-bg); border-radius:calc(var(--list-radius) + 2px);
+  border:1px solid var(--list-border); box-shadow:var(--list-shadow),
+  0 0 0 1px color-mix(in oklab, var(--grad-b, #67e6ff) 20%, transparent);
+  margin:1rem 0; overflow:auto; }
+.ascii-card pre{ margin:0; padding:1rem 1.1rem; line-height:1.35;
+  font:500 13.5px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; white-space:pre; tab-size:2; }
+.ascii-card .ascii-cap{ padding:.55rem .9rem .6rem; border-top:1px dashed var(--list-border);
+  color:var(--list-muted); font-size:.85em; }
+</style>
+
+<script id="LIST_BEAUTY_V2_SCRIPT">
+(()=>{'use strict';
+if(window.__LIST_BEAUTY_V2__) return; window.__LIST_BEAUTY_V2__=true;
+
+const q=(s,r=document)=>[...r.querySelectorAll(s)];
+
+const wrapLists=(root=document)=>{
+  const lists = q('ul,ol',root).filter(el=>{
+    if(el.closest('nav,menu,.no-beauty,.editor,.toolbar')) return false;
+    if(el.classList.contains('ul-neo')||el.classList.contains('ol-neo')) return false; // já cuidado
+    return true;
   });
+  for(const el of lists){
+    const isOL = el.tagName==='OL';
+    el.classList.add(isOL?'ol-neo':'ul-neo');
+    // preserva estilos existentes do usuário
+    if(!el.parentElement.classList.contains('list-card')){
+      const wrap = document.createElement('div');
+      wrap.className='list-card';
+      el.replaceWith(wrap); wrap.appendChild(el);
+    }
+  }
+};
+
+const asciiScore = t=>{
+  const box=/[─│┌┐└┘╭╮╰╯═╬╠╣╦╩]+/g, grid=/[-_=+*#\\/|]{3,}/g;
+  const L=t.split('\n'); let h=0;
+  for(const ln of L){ if(box.test(ln)||grid.test(ln)||ln.trim().startsWith('> ')) h++; }
+  return h>=Math.max(2,Math.ceil(L.length*0.2));
+};
+
+const enhanceASCII=(root=document)=>{
+  const cand=new Set([...q('pre',root),...q('code.language-text, code[class*="language-plaintext"]',root)]);
+  q('p',root).forEach(p=>{ const x=p.innerText||''; if(x.includes('\n')&&asciiScore(x)) cand.add(p); });
+  for(const el of cand){
+    if(el.closest('.ascii-card,.no-beauty')) continue;
+    const txt=(el.innerText||'').trim(); if(!asciiScore(txt)) continue;
+    const fig=document.createElement('figure'); fig.className='ascii-card';
+    const pre=document.createElement('pre'); pre.textContent=txt; fig.appendChild(pre);
+    if(!el.closest('pre')){ const fc=document.createElement('figcaption'); fc.className='ascii-cap'; fc.textContent='ASCII • renderizado em bloco'; fig.appendChild(fc); }
+    el.replaceWith(fig);
+  }
+};
+
+/* Heurística opcional: se o UL já tiver data-bullet="dash" ou class style-dash, mantém.
+   Caso NÃO tenha, deixamos como diamante (padrão), para não interferir nos teus looks. */
+const applyDashCapsuleByAttr=(root=document)=>{
+  q('ul.ul-neo',root).forEach(ul=>{
+    if(ul.matches('.style-dash,[data-bullet="dash"]')) return;
+    // não força nada; o usuário decide via classe/atributo
+  });
+};
+
+const run=(ctx=document)=>{
+  wrapLists(ctx);
+  enhanceASCII(ctx);
+  applyDashCapsuleByAttr(ctx);
+};
+
+if(window.__RENDERBUS__?.on){
+  window.__RENDERBUS__.on('after', run, {name:'list-ascii-beauty-v2', priority:95});
+}else{
+  (document.readyState==='loading') ? document.addEventListener('DOMContentLoaded',()=>run(document)) : run(document);
+  new MutationObserver(m=>m.forEach(x=>x.addedNodes&&x.addedNodes.forEach(n=>n.nodeType===1&&run(n))))
+    .observe(document.body,{childList:true,subtree:true});
+}
 })();
 </script>
+<!-- ============ /LIST/ASCII BEAUTY PATCH — V2 ============ -->
 
-<script id="INFODOX_EMBED_LOADER">
-(function(){
-  'use strict';
-  // Speech queue + adaptive App.speakText caller
-  window.Infodox = window.Infodox || {};
-  window.Infodox._speechQueue = window.Infodox._speechQueue || [];
-  window.Infodox._speakFlushing = false;
-
-  // Tries multiple signatures for App.speakText, with fallbacks
-  window.Infodox.speakViaApp = function(text, opts){
-    try{
-      // if App exists and likely ready, try common signatures
-      if(window.App && typeof window.App.speakText === 'function'){
-        try{ 
-          // 1) common: App.speakText(text)
-          App.speakText(text);
-          return true;
-        }catch(e1){
-          try{
-            // 2) App.speakText({text:...})
-            App.speakText({ text });
-            return true;
-          }catch(e2){
-            try{
-              // 3) App.speakText(text, opts)
-              App.speakText(text, opts || {});
-              return true;
-            }catch(e3){
-              console.warn('[Infodox] App.speakText called but failed on all signatures', e1, e2, e3);
-            }
-          }
-        }
-      }
-    }catch(e){
-      console.warn('[Infodox] error while calling App.speakText', e);
-    }
-    // fallback to native speechSynthesis
-    try{
-      const u = new SpeechSynthesisUtterance(String(text||''));
-      u.lang = (opts && opts.lang) || 'pt-BR';
-      u.rate = (opts && opts.rate) || 1.05;
-      window.speechSynthesis.cancel(); window.speechSynthesis.speak(u);
-      return true;
-    }catch(e){ console.warn('[Infodox] speechSynthesis fallback failed', e); }
-    return false;
-  };
-
-  // If App is not yet present, queue the speak requests
-  window.Infodox.enqueueSpeak = function(text, opts){
-    window.Infodox._speechQueue.push({text, opts});
-    // try flushing now (if App is already there)
-    window.Infodox._tryFlushSpeechQueue();
-  };
-
-  window.Infodox._tryFlushSpeechQueue = function(){
-    if(window.Infodox._speakFlushing) return;
-    if(!window.Infodox._speechQueue.length) return;
-    if(!(window.App && typeof window.App.speakText === 'function')){
-      // wait for App; set a watcher up to 3s
-      if(!window.Infodox._watchInstalled){
-        window.Infodox._watchInstalled = true;
-        let tries = 0;
-        const iv = setInterval(()=>{
-          tries++;
-          if(window.App && typeof window.App.speakText === 'function'){
-            clearInterval(iv);
-            window.Infodox._flushSpeechQueue();
-          } else if (tries > 30) { // ~3s
-            clearInterval(iv);
-            window.Infodox._flushSpeechQueue(); // try flush with fallback
-          }
-        }, 100);
-      }
-      return;
-    }
-    window.Infodox._flushSpeechQueue();
-  };
-
-  window.Infodox._flushSpeechQueue = function(){
-    if(window.Infodox._speakFlushing) return;
-    window.Infodox._speakFlushing = true;
-    while(window.Infodox._speechQueue.length){
-      const item = window.Infodox._speechQueue.shift();
-      try{ window.Infodox.speakViaApp(item.text, item.opts); }catch(e){ console.warn(e); }
-    }
-    window.Infodox._speakFlushing = false;
-  };
-
-  // convenience wrapper: tries to speak now or enqueues
-  function safeSpeak(msg){
-    try{
-      if(window.App && typeof window.App.speakText === 'function'){
-        return window.Infodox.speakViaApp(msg);
-      } else {
-        return window.Infodox.enqueueSpeak(msg);
-      }
-    }catch(e){
-      console.warn('[Infodox] safeSpeak error', e);
-      try{ const u = new SpeechSynthesisUtterance(String(msg||'')); window.speechSynthesis.speak(u); }catch(e2){}
-    }
-  }
-
-  // event firing helper
-  function fireRendered(node){
-    document.dispatchEvent(new CustomEvent('infodx:rendered', { detail: { node: node || document } }));
-  }
-
-  // initial kick after DOM ready
-  document.addEventListener('DOMContentLoaded', ()=> {
-    setTimeout(()=> {
-      fireRendered(document);
-      try{ safeSpeak('Módulos Infodose carregados.'); }catch(e){}
-    }, 90);
-  });
-
-  // Observe new messages (dynamic renderers)
-  const target = document.getElementById('chat-container') || document.body;
-  const mo = new MutationObserver((mut)=>{
-    for(const m of mut){
-      if(!m.addedNodes) continue;
-      for(const n of m.addedNodes){
-        if(n.nodeType !== 1) continue;
-        if(n.matches && n.matches('.msg-block')) {
-          fireRendered(n);
-        }
-      }
-    }
-  });
-  mo.observe(target, { childList:true, subtree:true });
-
-  function runPostRender(node){
-    try{
-      if(window.__TEXT_BEAUTY_V3_RUN__) window.__TEXT_BEAUTY_V3_RUN__('#chat-container');
-      if(window.__TEXT_BEAUTY_V3__) {
-        window.__TEXT_BEAUTY_V3__.processInline(document);
-        window.__TEXT_BEAUTY_V3__.beautifyFlow(document);
-        window.__TEXT_BEAUTY_V3__.enableCopyLists(document);
-        window.__TEXT_BEAUTY_V3__.renderRawHTML(document);
-      }
-      if(window.TrinityTTS && typeof window.TrinityTTS.injectJokers === 'function'){
-        window.TrinityTTS.injectJokers('#chat-container');
-      }
-    }catch(e){ console.warn('[INFODOX_EMBED_LOADER] post render error', e); }
-  }
-
-  document.addEventListener('infodx:rendered', (e)=> runPostRender(e && e.detail ? e.detail.node : document));
-
-  // expose manual entrypoint
-  window.Infodox.runAll = function(rootSelector){
-    const root = rootSelector ? document.querySelector(rootSelector) : document;
-    runPostRender(root);
-    try{ safeSpeak('Rotina Infodose executada.'); }catch(e){}
-  };
-
-  // expose safeSpeak publicly
-  window.Infodox.safeSpeak = safeSpeak;
-
-  console.info('[INFODOX PATCH] Loaded (robust speak + beauty + trinity).');
-})();
-</script>
-
-<!-- ============================
-   FIM DO PATCH
-   ============================ -->
- 
 </body>
 </html>
